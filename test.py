@@ -1,10 +1,12 @@
 import torch
 import numpy as np
-import torchvision
 import torchvision.datasets as datasets
-import math
 import model as M
-    
+import time
+import argparse
+
+# start
+# 1.8 updates per second
 
 def normalize(data):
     for d in data:
@@ -12,7 +14,7 @@ def normalize(data):
     return data
 
 
-def validate(max_samples=None):
+def validate(network, max_samples=None):
     validation_samples = max_samples or len(mnist_val)
     correct = 0
     total = 0
@@ -31,31 +33,79 @@ def validate(max_samples=None):
 
     print("Accuracy: {:.2f}%".format(100 * (correct / total)))
 
+def train():
 
-DATA_PATH = "data"
-DOWNLOAD = False
+    print("Training...")
 
-mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
-mnist_train = normalize(mnist_train)
-mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
-mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
-mnist_val = normalize(mnist_val)
-mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
+    num_classes = 10
 
-num_classes = 10
+    network = [M.GMN(10, [128, 128, 1], 28 ** 2, 4) for i in range(num_classes)]
 
-network = [M.GMN(10, [128, 128, 1], 28**2, 4) for i in range(num_classes)]
+    training_samples = len(mnist_train)
 
-training_samples = len(mnist_train)
+    for i in range(training_samples):
+        if (i + 1) % 10 == 0:
+            print("Training: {:.2f}%".format(100 * (i + 1) / training_samples))
+        for j in range(len(network)):
+            network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0,
+                                       min(100 / (i + 1), 0.01))
 
-for i in range(training_samples):
-    if (i + 1) % 10 == 0:
-        print("Training: {:.2f}%".format(100 * (i + 1) / training_samples))
-    for j in range(len(network)):
-        network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0, min(100 / (i + 1), 0.01))
+        # quick validation check...
+        if (i + 1) % 100 == 0:
+            validate(network, 25)
 
-    # quick validation check...
-    if (i+1) % 100 == 0:
-        validate(25)
+    validate(network)
 
-validate()
+
+def load_data():
+
+    DATA_PATH = "data"
+    DOWNLOAD = False
+
+    global mnist_train
+    global mnist_train_labels
+    global mnist_val
+    global mnist_val_labels
+
+    mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
+    mnist_train = normalize(mnist_train)
+    mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
+    mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
+    mnist_val = normalize(mnist_val)
+    mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
+
+    return mnist_train, mnist_train_labels, mnist_val, mnist_val_labels
+
+def benchmark():
+    """ Perform a quick benchmark. """
+
+    UPDATES = 10
+    network = [M.GMN(10, [128, 128, 1], 28 ** 2, 4) for i in range(10)]
+    print("Performing Benchmark...")
+    start_time = time.time()
+    for i in range(UPDATES):
+        for j in range(len(network)):
+            network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0,
+                                       min(100 / (i + 1), 0.01))
+
+    time_taken = time.time() - start_time
+    updates_per_second = UPDATES / time_taken
+
+    print("Performed {:.1f} updates per second.".format(updates_per_second))
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mode", default="train")
+    args = parser.parse_args()
+
+    if args.mode == 'train':
+        load_data()
+        train()
+    elif args.mode == "benchmark":
+        load_data()
+        benchmark()
+    else:
+        raise Exception(f"Invalid mode {args.mode}")
+
