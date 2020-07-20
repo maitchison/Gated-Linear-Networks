@@ -47,11 +47,11 @@ class GM_Node():
         
         self.w[context] = GM_Node.clip(self.w[context] - learning_rate * (forward - target) * GM_Node.logit(p), hyper_cube_bound)
         return loss
-    
+
     #Inverse sigmoid function on torch tensor
     def logit(x):
         return torch.log(x / (1 - x + 1e-6) + 1e-6)
-        
+
     #Project x onto the hyper_cube_bound
     def clip(x, hyper_cube_bound):
         x[x > hyper_cube_bound] = hyper_cube_bound
