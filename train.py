@@ -8,11 +8,10 @@ import argparse
 # start
 # 1.8 updates per second
 
-def normalize(data):
+def center(data):
+    """ Center data so that each example has mean 0."""
     for d in data:
-        d = d - d.mean()
-    return data
-
+        d -= d.mean()
 
 def validate(network, max_samples=None):
     validation_samples = max_samples or len(mnist_val)
@@ -68,10 +67,10 @@ def load_data():
     global mnist_val_labels
 
     mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
-    mnist_train = normalize(mnist_train)
+    center(mnist_train)
     mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
     mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
-    mnist_val = normalize(mnist_val)
+    center(mnist_val)
     mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
 
     return mnist_train, mnist_train_labels, mnist_val, mnist_val_labels
