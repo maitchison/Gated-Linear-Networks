@@ -1,11 +1,11 @@
 # Gausian Gated-Linear-Networks
 
-This project will implement [Gausian-Gated Linear Networks](https://arxiv.org/pdf/2006.05964.pdf) in PyTorch and experiment with their use in [Distributional Reinforcement Learning](https://arxiv.org/pdf/1707.06887.pdf).
+This project will implement [Gausian-Gated Linear Networks](https://arxiv.org/pdf/2006.05964.pdf) in PyTorch and experiment with their use in [Distributional Reinforcement Learning](https://arxiv.org/pdf/1707.06887.pdf). Currently it just aims to reproduce some of the results in the GNL paper.
 
 ## Usage
 
 The script will train a Gated Linear Network on the MNIST dataset. Each hand-written digit is deskewed, and then
-contract normalized. The number of layers can be specified via --layers. 
+contrast normalized. The number of layers can be specified via --layers. 
 
 ### Run Benchmark
 ```python train.py benchmark```
