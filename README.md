@@ -1,6 +1,6 @@
 # Gausian Gated-Linear-Networks
 
-This project will implement [Gausian-Gated Linear Networks](https://arxiv.org/pdf/2006.05964.pdf) in PyTorch and experiment with their use in [Distributional Reinforcement Learning](https://arxiv.org/pdf/1707.06887.pdf). Currently it just aims to reproduce some of the results in the GNL paper.
+This project will implement [Gausian-Gated Linear Networks](https://arxiv.org/pdf/2006.05964.pdf) in PyTorch and experiment with their use in [Distributional Reinforcement Learning](https://arxiv.org/pdf/1707.06887.pdf). Currently it just aims to reproduce some of the results in the GLN paper.
 
 ## Usage
 
