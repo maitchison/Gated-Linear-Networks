@@ -98,7 +98,7 @@ def train(run_name, layers=2):
 
     num_classes = 10
 
-    network = [M.GMN(([128]*layers)+[1], 28**2, 4) for i in range(num_classes)]
+    network = [M.GMN(([128]*layers)+[1], 28**2, 4, args.device) for i in range(num_classes)]
 
     training_samples = len(mnist_train)
 
@@ -162,7 +162,7 @@ def train(run_name, layers=2):
     db['final_score'] = score
     save_db(db)
 
-def load_data():
+def load_data(limit_samples=None):
 
     DATA_PATH = "data"
     DOWNLOAD = False
@@ -175,9 +175,13 @@ def load_data():
     print("Loading dataset...")
 
     mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
+    if limit_samples:
+        mnist_train = mnist_train[:limit_samples]
     mnist_train = brightness_norm(deskew(mnist_train))
     mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
     mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
+    if limit_samples:
+        mnist_val = mnist_val[:limit_samples]
     mnist_val = brightness_norm(deskew(mnist_val))
     mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
 
@@ -194,7 +198,7 @@ def benchmark():
 
     UPDATES = 10
 
-    network = [M.GMN([128, 1], 28 ** 2, 4) for i in range(10)]
+    network = [M.GMN([128, 1], 28 ** 2, 4, device=args.device) for i in range(10)]
     print("Performing Benchmark...")
     start_time = time.time()
     for i in range(UPDATES):
@@ -214,13 +218,15 @@ if __name__ == "__main__":
     parser.add_argument("mode", default="train")
     parser.add_argument("--run", default="default")
     parser.add_argument("--layers", type=int, default=2)
+    parser.add_argument("--device", type=str, default="cpu")
+
     args = parser.parse_args()
 
     if args.mode == 'train':
         load_data()
         train(run_name=args.run, layers=args.layers)
     elif args.mode == "benchmark":
-        load_data()
+        load_data(1000)
         benchmark()
     else:
         raise Exception(f"Invalid mode {args.mode}")

@@ -48,10 +48,10 @@ class GMN_Layer_Vectorized():
 
     def forward(self, z, p):
         if not p is None:
-            p_hat = torch.cat((torch.as_tensor([self.bias]), p))
+            p_hat = torch.cat((torch.as_tensor([self.bias].to(device=self.device)), p))
         else:
             #Forward with random base probabilities
-            p_hat = torch.cat((torch.as_tensor([self.bias]), 0.5 * torch.ones(self.in_features)))
+            p_hat = torch.cat((torch.as_tensor([self.bias].to(device=self.device)), 0.5 * torch.ones(self.in_features)))
 
         #[self.nodes[i].forward(p_hat, z) for i in range(len(self.nodes))]
         #context = self.get_context(z)
@@ -74,18 +74,19 @@ class GMN_Layer_Vectorized():
 
 class GMN_layer():
     
-    def __init__(self, in_features, num_nodes, side_info_size, num_contexts):
+    def __init__(self, in_features, num_nodes, side_info_size, num_contexts, device='cpu'):
         """
         :param in_features: number of input features (nodes in previous layer)
         :param num_nodes: number of nodes in this layer
         :param side_info_size: size of side channel (z)
         :param num_contexts: number of contex planes
         """
+        self.device = device
         self.in_features = in_features
         self.num_nodes = num_nodes
-        self.nodes = [GM_Node(in_features + 1, side_info_size, num_contexts) for i in range(num_nodes)]
+        self.nodes = [GM_Node(in_features + 1, side_info_size, num_contexts, device=device) for i in range(num_nodes)]
         self.bias = math.e / (math.e + 1) # anything from (epsilon...1-epsilon)/{0.5} will be fine.
-        self.random_projection = normal_distribution.sample([in_features, num_nodes])[:,:,0]
+        self.random_projection = normal_distribution.sample([in_features, num_nodes])[:, :, 0]
         
     def __call__(self, z, p):
         return self.forward(p, z)
@@ -105,7 +106,7 @@ class GMN_layer():
             print(p.shape)
 
         # add the bias
-        p_hat = torch.cat((torch.as_tensor([self.bias]), p))
+        p_hat = torch.cat((torch.as_tensor([self.bias]).to(device=self.device), p))
 
         return [self.nodes[i].forward(p_hat, z) for i in range(len(self.nodes))]
     
@@ -119,7 +120,9 @@ class GMN_layer():
 
 class GM_Node():
 
-    def __init__(self, in_features, input_size, num_contexts, init_weights=None):
+    def __init__(self, in_features, input_size, num_contexts, init_weights=None, device='cpu'):
+
+        self.device = device
         self.in_features = in_features
         self.num_contexts = num_contexts
         self.context_dim = 2 ** num_contexts
@@ -127,10 +130,10 @@ class GM_Node():
             if not in_features == len(init_weights):
                 raise Exception
             else:
-                self.w = init_weights
+                self.w = init_weights.to(device=self.device)
         else:
             # weights can be initialized to anything, but empirically 1/(neurons in previous layer) works well.
-            self.w = torch.zeros(self.context_dim, in_features) + (1/in_features)
+            self.w = torch.zeros(self.context_dim, in_features, device=self.device) + (1/in_features)
 
         # find a random direction then normalize
         self.context_vectors = [normal_distribution.sample([input_size]).view(-1) for i in range(num_contexts)]
@@ -138,6 +141,9 @@ class GM_Node():
             self.context_vectors[i] /= torch.norm(self.context_vectors[i], p=2)
 
         self.context_biases = normal_distribution.sample([num_contexts]).view(-1)
+
+        self.context_vectors = torch.stack(self.context_vectors).to(dtype=torch.float, device=self.device)
+        self.context_biases = self.context_biases.to(dtype=torch.float, device=self.device)
 
     def get_context(self, x):
         ret = 0
@@ -162,9 +168,9 @@ class GM_Node():
     def backward(self, forward, target, p, context, learning_rate, hyper_cube_bound=200):
         epsilon = 1e-6
         if target == 0:
-            loss = -1 * torch.log(min(1 - forward + epsilon, torch.as_tensor(1 - epsilon)))
+            loss = -1 * torch.log(min(1 - forward + epsilon, torch.as_tensor(1 - epsilon).to(device=self.device)))
         else:
-            loss = -1 * torch.log(min(forward + epsilon, torch.as_tensor(1 - epsilon)))
+            loss = -1 * torch.log(min(forward + epsilon, torch.as_tensor(1 - epsilon).to(device=self.device)))
 
         if torch.isnan(loss):
             print(target, p, (p / (1 - p + 1e-6)))
