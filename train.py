@@ -79,9 +79,9 @@ def validate(network, max_samples=None):
 
     for i in indexes[:validation_samples]:
 
-        prob = torch.cat([network[j].infer(mnist_val[i]).unsqueeze(0) for j in range(len(network))])
+        probs = torch.stack([model.infer(mnist_val[i]) for model in network])
+        pred = torch.argmax(probs)
 
-        pred = torch.argmax(prob)
         if pred == mnist_val_labels[i]:
             correct = correct + 1
         total = total + 1
@@ -132,14 +132,15 @@ def train(run_name, layers=2):
         probs = []
         for j in range(len(network)):
             probs.append(network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0, lr))
-        predicted_class = torch.argmax(torch.Tensor(probs))
+        probs = torch.stack(probs)
+        predicted_class = torch.argmax(probs)
         true_class = mnist_train_labels[i]
         results.append(int(predicted_class == true_class))
         training_accuracy = np.mean(results[-1000:]) * 100
 
         # quick validation check...
         if iteration % 1000 == 0:
-            score = validate(network, 100)
+            score = validate(network, 1000)
             db['time_stamp'].append(time.time())
             print(f" -quick check {score:.1f}%")
             db['val_score'].append(score)
@@ -148,12 +149,6 @@ def train(run_name, layers=2):
 
             db['lr'].append(lr)
             save_db(db)
-
-        if (iteration + 1) % 10000 == 0:
-            score = validate(network, 1000)
-            print()
-            print(f"Performance: {score:.1f}%")
-            print()
 
     score = validate(network)
     print("*"*60)
@@ -196,7 +191,7 @@ def load_data(limit_samples=None):
 def benchmark():
     """ Perform a quick benchmark. """
 
-    UPDATES = 10
+    UPDATES = 100
 
     network = [M.GMN([128, 1], 28 ** 2, 4, device=args.device) for i in range(10)]
     print("Performing Benchmark...")

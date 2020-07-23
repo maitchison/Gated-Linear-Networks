@@ -9,10 +9,14 @@ class GMN():
         :param num_contexts: int, number of context planes.
         """
         # note we use the side_channel size as initial layer width so that z can be used as p_0
+
+        layer_func = L.GMN_Layer_Vectorized
+        #layer_func = L.GMN_layer
+
         self.device = device
-        self.layers = [L.GMN_layer(input_size, num_nodes[0], input_size, num_contexts, device=device)]
+        self.layers = [layer_func(input_size, num_nodes[0], input_size, num_contexts, device=device)]
         self.layers = self.layers + [
-            L.GMN_layer(num_nodes[i - 1], num_nodes[i], input_size, num_contexts, device=device)
+            layer_func(num_nodes[i - 1], num_nodes[i], input_size, num_contexts, device=device)
             for i in range(1, len(num_nodes))
         ]
 
@@ -25,7 +29,7 @@ class GMN():
                     forward = self.layers[i].forward(z, z)
                     self.layers[i].backward(forward, target, learning_rate)
                 else:
-                    p = torch.cat([forward[i][0].unsqueeze(0) for i in range(self.layers[i].in_features)])
+                    p = forward[0]
                     forward = self.layers[i].forward(z, p)
                     self.layers[i].backward(forward, target, learning_rate)
 
@@ -34,6 +38,11 @@ class GMN():
         return prediction
 
     def infer(self, z):
+        """
+        Returns probability of example z being in class.
+        :param z:
+        :return:
+        """
         z = z.to(self.device)
         with torch.no_grad():
             z = z.view(-1)
@@ -42,7 +51,7 @@ class GMN():
                     assert z.min() >= 0 and z.max() <= 1, "Side channel must be in the range [0..1]"
                     forward = self.layers[i].forward(z, z)
                 else:
-                    p = torch.cat([forward[i][0].unsqueeze(0) for i in range(self.layers[i].in_features)])
+                    p = forward[0]
                     forward = self.layers[i].forward(z, p)
             return forward[0][0]
 
