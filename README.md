@@ -19,12 +19,12 @@ Gated Linear networks, due to the conditional execution, are fairly slow. This i
 
 Performance using 10 [128,128,1] networks with 16 contexts (4 hyperplanes)
 
-| Version | Updates per second | Time to train MNIST for 1 epoch |
-|---------|--------------------|---------------------------------|
-Original implementation by killamocingbird | 1.8 | ~9 hours |  
-torch.no_grad() | 3.6 | ~4.5 hours |
-vectorized layers  | ? | ? |
-GPU implementation  | ? | ? |
+| Version | Updates per second | Time to train MNIST for 1 epoch | Notes |
+|---------|--------------------|---------------------------------|-------|
+Original implementation by killamocingbird | 1.8 | ~9 hours | |  
+torch.no_grad() | 3.6 | ~4.5 hours | |
+vectorized layers  | 65 | ~15min | Using ~7 cores |
+GPU implementation  | 45 | ~20min | This algorithms works better on CPU |
  
  ## Notes on Accuracy 
  
@@ -35,4 +35,5 @@ The accuracy of this implementation does not yet reproduce the 98% result with a
 Original implementation by killamocingbird | 89.6 |  |  
 Added deskew | 94.3 | deskewing makes a big difference.  |
 Fixed hyperplanes, and weight initialization | ? | - |
+Using p_0=z | ? | Previously p_0 was constant |
   
