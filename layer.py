@@ -19,8 +19,8 @@ class GMN_Layer_Vectorized():
         self.context_dim = 2 ** num_contexts
         self.num_nodes = num_nodes
 
-        # generate vectorized
-        self.w = torch.zeros(self.num_nodes, self.context_dim, self.in_features)
+        # generate vectorized tensors
+        self.w = torch.zeros(self.num_nodes, self.context_dim, self.in_features) + (1/self.in_features)
         self.context_vectors = torch.Tensor(
             [[normal_distribution.sample([side_info_size]).view(-1) for i in range(num_contexts)] for _ in range(self.num_nodes)]
         )
@@ -69,21 +69,29 @@ class GMN_layer():
     def __init__(self, in_features, num_nodes, side_info_size, num_contexts):
         self.in_features = in_features
         self.nodes = [GM_Node(in_features + 1, side_info_size, num_contexts) for i in range(num_nodes)]
-        self.bias = math.e / (math.e + 1)
+        self.bias = math.e / (math.e + 1) # anything from (epsilon...1-epsilon)/{0.5} will be fine.
         
     def __call__(self, z, p):
         return self.forward(p, z)
 
     def forward(self, z, p):
+        """
+        :param z: side_channel data, float tensor of dims [in_features]
+        :param p: input probabilities from previous layer, (optional, can be none) float tensor of dims [input_size]
+        :return: array of tuples for each node each containing
+            node prediction (float),
+            probabilities (as per input),
+            selected context
+        """
         if not p is None:
             p_hat = torch.cat((torch.as_tensor([self.bias]), p))
         else:
-            #Forward with random base probabilities
+            # use 0.5 as our initial base probabilities
             p_hat = torch.cat((torch.as_tensor([self.bias]), 0.5 * torch.ones(self.in_features)))
 
         return [self.nodes[i].forward(p_hat, z) for i in range(len(self.nodes))]
     
-    def backward(self, forward, target, learning_rate, hyper_cube_bound = 200):
+    def backward(self, forward, target, learning_rate, hyper_cube_bound=200):
         #forward is an array with each element being a tuple (output, p_hat, context)
         loss = []
         for i in range(len(self.nodes)):
@@ -103,10 +111,15 @@ class GM_Node():
             else:
                 self.w = init_weights
         else:
-            self.w = torch.zeros(self.context_dim, in_features)
+            # weights can be initialized to anything, but empirically 1/(neurons in previous layer) works well.
+            self.w = torch.zeros(self.context_dim, in_features) + (1/in_features)
 
+        # find a random direction then normalize
         self.context_vectors = [normal_distribution.sample([input_size]).view(-1) for i in range(num_contexts)]
-        self.context_biases = [0.0 for i in range(num_contexts)]
+        for i in range(len(self.context_vectors)):
+            self.context_vectors[i] /= torch.norm(self.context_vectors[i], p=2)
+
+        self.context_biases = normal_distribution.sample([num_contexts]).view(-1)
 
     def get_context(self, x):
         ret = 0
@@ -117,6 +130,14 @@ class GM_Node():
 
     # Geo_wc(z)(x_t = 1; p_t)
     def forward(self, p, z):
+        """
+        :param p: input probabilities from previous layer, float tensor of dims [input_size]
+        :param z: side_channel data, float tensor of dims [in_features]
+        :return: tuple of
+            node prediction (float),
+            probabilities (as per input)
+            selected context
+        """
         context = self.get_context(z)
         return torch.sigmoid(torch.dot(self.w[context], GM_Node.logit(p))), p, context
 
@@ -133,6 +154,7 @@ class GM_Node():
 
         self.w[context] = GM_Node.clip(self.w[context] - learning_rate * (forward - target) * GM_Node.logit(p),
                                        hyper_cube_bound)
+
         return loss
 
     # Inverse sigmoid function on torch tensor

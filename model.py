@@ -8,25 +8,30 @@ class GMN():
     
     def train_on_sample(self, z, target, learning_rate):
         z = z.view(-1)
-        for i in range(len(self.layers)):
-            if i == 0:
-                forward = self.layers[i].forward(z, None)
-                self.layers[i].backward(forward, target, learning_rate)
-            else:
-                p = torch.cat([forward[i][0].unsqueeze(0) for i in range(self.layers[i].in_features)])
-                forward = self.layers[i].forward(z, p)
-                loss = self.layers[i].backward(forward, target, learning_rate)
-        return loss
-    
+        with torch.no_grad():
+            for i in range(len(self.layers)):
+                if i == 0:
+                    forward = self.layers[i].forward(z, None)
+                    self.layers[i].backward(forward, target, learning_rate)
+                else:
+                    p = torch.cat([forward[i][0].unsqueeze(0) for i in range(self.layers[i].in_features)])
+                    forward = self.layers[i].forward(z, p)
+                    loss = self.layers[i].backward(forward, target, learning_rate)
+
+        prediction = forward[0][0]
+
+        return prediction
+
     def infer(self, z):
-        z = z.view(-1)
-        for i in range(len(self.layers)):
-            if i == 0:
-                forward = self.layers[i].forward(z, None)
-            else:
-                p = torch.cat([forward[i][0].unsqueeze(0) for i in range(self.layers[i].in_features)])
-                forward = self.layers[i].forward(z, p)
-        return forward[0][0]
-            
+        with torch.no_grad():
+            z = z.view(-1)
+            for i in range(len(self.layers)):
+                if i == 0:
+                    forward = self.layers[i].forward(z, None)
+                else:
+                    p = torch.cat([forward[i][0].unsqueeze(0) for i in range(self.layers[i].in_features)])
+                    forward = self.layers[i].forward(z, p)
+            return forward[0][0]
+
         
         

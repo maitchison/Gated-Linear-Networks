@@ -9,7 +9,10 @@ from scipy.ndimage import interpolation
 
 
 # start
-# 1.8 updates per second
+# 1.8 updates per second (128, 128, 1)
+# 1.2 updates per second (128, 128,128, 1)
+# no_grad
+# 3.5 updates per second (128, 128, 1)
 
 def moments(image):
     # From https://fsix.github.io/mnist/Deskewing.html
@@ -53,6 +56,19 @@ def center(data):
         result[i] = data[i] - data[i].mean()
     return result
 
+def brightness_norm(data, epsilon = 0.0):
+    """
+    Norm each example in data so that min = epsilon, max = 1-epsilon.
+    :param data: float tensor of dims [n,28,28]
+    :return: float tensor of dims [n,28,28]
+    """
+    result = torch.zeros_like(data)
+    for i in range(len(data)):
+        result[i] = (data[i] - data[i].min()) + epsilon
+        result[i] = (result[i] / result[i].max()) * (1-epsilon)
+    return result
+
+
 def validate(network, max_samples=None):
     validation_samples = max_samples or len(mnist_val)
     correct = 0
@@ -73,40 +89,67 @@ def validate(network, max_samples=None):
     return 100 * (correct / total)
 
 def save_db(db):
-    with open(db["filename"], 'w') as f:
+    with open(db["filename"], 'wb') as f:
         pickle.dump(db, f)
 
-def train():
+def train(run_name, layers=2):
 
     print("Training...")
 
     num_classes = 10
 
-    network = [M.GMN(10, [128, 128, 1], 28 ** 2, 4) for i in range(num_classes)]
+    network = [M.GMN(10, ([128]*layers)+[1], 28 ** 2, 4) for i in range(num_classes)]
 
     training_samples = len(mnist_train)
 
     db = {}
+    db['run_name'] = run_name
     db['val_score'] = []
     db['time_stamp'] = []
     db['iteration'] = []
+    db['lr'] = []
+    db['train_score'] = []
+    db['filename'] = db['run_name']+'.db'
+    db['layers'] = layers
 
-    for i in range(training_samples):
-        if (i + 1) % 100 == 0:
-            print(" -training: {:.2f}%".format(100 * (i + 1) / training_samples))
+    print(f"Starting run {db['run_name']}")
+
+    training_order = list(range(training_samples))
+    np.random.shuffle(training_order)
+
+    results = []
+
+    training_accuracy = 0.0
+
+    for iteration, i in enumerate(training_order):
+
+        lr = min(100 / (iteration + 1), 0.01)
+
+        if (iteration + 1) % 100 == 0:
+            percent_complete = 100 * (iteration + 1) / training_samples
+            print(f" -training acc: {training_accuracy:.2f}%  ({percent_complete:.2f}%)")
+
+        probs = []
         for j in range(len(network)):
-            network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0,
-                                       min(100 / (i + 1), 0.01))
+            probs.append(network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0, lr))
+        predicted_class = torch.argmax(torch.Tensor(probs))
+        true_class = mnist_train_labels[i]
+        results.append(int(predicted_class == true_class))
+        training_accuracy = np.mean(results[-1000:]) * 100
 
         # quick validation check...
-        if i % 1000 == 0:
+        if iteration % 1000 == 0:
             score = validate(network, 100)
             db['time_stamp'].append(time.time())
             print(f" -quick check {score:.1f}%")
             db['val_score'].append(score)
-            db['iteration'].append(i)
+            db['iteration'].append(iteration)
+            db['train_score'].append(training_accuracy)
 
-        if (i + 1) % 10000 == 0:
+            db['lr'].append(lr)
+            save_db(db)
+
+        if (iteration + 1) % 10000 == 0:
             score = validate(network, 1000)
             print()
             print(f"Performance: {score:.1f}%")
@@ -116,7 +159,8 @@ def train():
     print("*"*60)
     print(f"Final score: {score:.2f}%")
     print("*"*60)
-    db['final_score'].append(score)
+    db['final_score'] = score
+    save_db(db)
 
 def load_data():
 
@@ -131,10 +175,10 @@ def load_data():
     print("Loading dataset...")
 
     mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
-    mnist_train = center(deskew(mnist_train))
+    mnist_train = brightness_norm(deskew(mnist_train))
     mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
     mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
-    mnist_val = center(deskew(mnist_val))
+    mnist_val = brightness_norm(deskew(mnist_val))
     mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
 
     n = len(mnist_train)
@@ -149,7 +193,8 @@ def benchmark():
     """ Perform a quick benchmark. """
 
     UPDATES = 10
-    network = [M.GMN(10, [128, 128, 1], 28 ** 2, 4) for i in range(10)]
+
+    network = [M.GMN(10, [128, 1], 28 ** 2, 4) for i in range(10)]
     print("Performing Benchmark...")
     start_time = time.time()
     for i in range(UPDATES):
@@ -167,11 +212,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", default="train")
+    parser.add_argument("--run", default="default")
+    parser.add_argument("--layers", type=int, default=2)
     args = parser.parse_args()
 
     if args.mode == 'train':
         load_data()
-        train()
+        train(run_name=args.run, layers=args.layers)
     elif args.mode == "benchmark":
         load_data()
         benchmark()
