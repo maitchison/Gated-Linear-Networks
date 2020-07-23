@@ -98,7 +98,7 @@ def train(run_name, layers=2):
 
     num_classes = 10
 
-    network = [M.GMN(10, ([128]*layers)+[1], 28 ** 2, 4) for i in range(num_classes)]
+    network = [M.GMN(([128]*layers)+[1], 28**2, 4) for i in range(num_classes)]
 
     training_samples = len(mnist_train)
 
@@ -194,7 +194,7 @@ def benchmark():
 
     UPDATES = 10
 
-    network = [M.GMN(10, [128, 1], 28 ** 2, 4) for i in range(10)]
+    network = [M.GMN([128, 1], 28 ** 2, 4) for i in range(10)]
     print("Performing Benchmark...")
     start_time = time.time()
     for i in range(UPDATES):

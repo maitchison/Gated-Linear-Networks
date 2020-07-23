@@ -19,8 +19,16 @@ class GMN_Layer_Vectorized():
         self.context_dim = 2 ** num_contexts
         self.num_nodes = num_nodes
 
-        # generate vectorized tensors
+        # initialize weights
         self.w = torch.zeros(self.num_nodes, self.context_dim, self.in_features) + (1/self.in_features)
+
+        # contexts weights
+        self.context_vectors = [normal_distribution.sample([side_info_size]).view(-1) for i in range(num_contexts)]
+        for i in range(len(self.context_vectors)):
+            self.context_vectors[i] /= torch.norm(self.context_vectors[i], p=2)
+
+        self.context_biases = normal_distribution.sample([num_contexts]).view(-1)
+
         self.context_vectors = torch.Tensor(
             [[normal_distribution.sample([side_info_size]).view(-1) for i in range(num_contexts)] for _ in range(self.num_nodes)]
         )
@@ -67,9 +75,17 @@ class GMN_Layer_Vectorized():
 class GMN_layer():
     
     def __init__(self, in_features, num_nodes, side_info_size, num_contexts):
+        """
+        :param in_features: number of input features (nodes in previous layer)
+        :param num_nodes: number of nodes in this layer
+        :param side_info_size: size of side channel (z)
+        :param num_contexts: number of contex planes
+        """
         self.in_features = in_features
+        self.num_nodes = num_nodes
         self.nodes = [GM_Node(in_features + 1, side_info_size, num_contexts) for i in range(num_nodes)]
         self.bias = math.e / (math.e + 1) # anything from (epsilon...1-epsilon)/{0.5} will be fine.
+        self.random_projection = normal_distribution.sample([in_features, num_nodes])[:,:,0]
         
     def __call__(self, z, p):
         return self.forward(p, z)
@@ -83,11 +99,13 @@ class GMN_layer():
             probabilities (as per input),
             selected context
         """
-        if not p is None:
-            p_hat = torch.cat((torch.as_tensor([self.bias]), p))
-        else:
-            # use 0.5 as our initial base probabilities
-            p_hat = torch.cat((torch.as_tensor([self.bias]), 0.5 * torch.ones(self.in_features)))
+        if p is None:
+            print(self.in_features, self.num_nodes, self.random_projection.shape, z.shape, end=' ')
+            p = torch.sigmoid(self.random_projection * z)
+            print(p.shape)
+
+        # add the bias
+        p_hat = torch.cat((torch.as_tensor([self.bias]), p))
 
         return [self.nodes[i].forward(p_hat, z) for i in range(len(self.nodes))]
     
