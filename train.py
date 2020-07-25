@@ -56,20 +56,20 @@ def center(data):
         result[i] = data[i] - data[i].mean()
     return result
 
-def brightness_norm(data, epsilon = 0.0):
+def brightness_norm(data):
     """
-    Norm each example in data so that min = epsilon, max = 1-epsilon.
+    Norm each example in data so that min = -1, max = 1.
     :param data: float tensor of dims [n,28,28]
     :return: float tensor of dims [n,28,28]
     """
     result = torch.zeros_like(data)
     for i in range(len(data)):
-        result[i] = (data[i] - data[i].min()) + epsilon
-        result[i] = (result[i] / result[i].max()) * (1-epsilon)
+        result[i] = (data[i] - data[i].min())
+        result[i] = (result[i] / result[i].max()) * 2 - 1
     return result
 
+def validate(network, max_samples=None, allow_training=False):
 
-def validate(network, max_samples=None):
     validation_samples = max_samples or len(mnist_val)
     correct = 0
     total = 0
@@ -78,11 +78,15 @@ def validate(network, max_samples=None):
     np.random.shuffle(indexes)
 
     for i in indexes[:validation_samples]:
+        probs = []
+        for j in range(len(network)):
+            probs.append(
+                network[j].train_on_sample(mnist_val[i].view(-1), 1 if j == mnist_val_labels[i] else 0, 0.001, apply_update=allow_training)
+            )
+        probs = torch.stack(probs)
+        predicted_class = torch.argmax(probs)
 
-        probs = torch.stack([model.infer(mnist_val[i]) for model in network])
-        pred = torch.argmax(probs)
-
-        if pred == mnist_val_labels[i]:
+        if predicted_class == mnist_val_labels[i]:
             correct = correct + 1
         total = total + 1
 
@@ -92,13 +96,21 @@ def save_db(db):
     with open(db["filename"], 'wb') as f:
         pickle.dump(db, f)
 
+def create_model(num_classes):
+    return [M.GMN(
+        ([args.nodes] * args.layers) + [1],
+        args.feature_size,
+        args.context_planes,
+        args.device,
+        feature_mapping=args.feature_mapping,
+    ) for i in range(num_classes)]
+
+
 def train(run_name, layers=2):
 
     print("Training...")
 
-    num_classes = 10
-
-    network = [M.GMN(([128]*layers)+[1], 28**2, 4, args.device) for i in range(num_classes)]
+    network = create_model(10)
 
     training_samples = len(mnist_train)
 
@@ -123,11 +135,23 @@ def train(run_name, layers=2):
 
     for iteration, i in enumerate(training_order):
 
-        lr = min(100 / (iteration + 1), 0.01)
+        lr = min(args.lr_scale / (iteration + 1), args.lr_max)
 
+        # log progress
         if (iteration + 1) % 100 == 0:
             percent_complete = 100 * (iteration + 1) / training_samples
-            print(f" -training acc: {training_accuracy:.2f}%  ({percent_complete:.2f}%)")
+
+            #val_accuracy = validate(network, 100)
+            #db['val_score'].append(val_accuracy)
+            #print(f" -train_err: {100-training_accuracy:.1f}%  val_err: {100-val_accuracy:.1f}% ({percent_complete:.2f}%)")
+
+            print(f" -train_err: {100-training_accuracy:.1f}% ({percent_complete:.2f}%)")
+
+            db['time_stamp'].append(time.time())
+            db['iteration'].append(iteration)
+            db['train_score'].append(training_accuracy)
+            db['lr'].append(lr)
+            save_db(db)
 
         probs = []
         for j in range(len(network)):
@@ -137,18 +161,6 @@ def train(run_name, layers=2):
         true_class = mnist_train_labels[i]
         results.append(int(predicted_class == true_class))
         training_accuracy = np.mean(results[-1000:]) * 100
-
-        # quick validation check...
-        if iteration % 1000 == 0:
-            score = validate(network, 1000)
-            db['time_stamp'].append(time.time())
-            print(f" -quick check {score:.1f}%")
-            db['val_score'].append(score)
-            db['iteration'].append(iteration)
-            db['train_score'].append(training_accuracy)
-
-            db['lr'].append(lr)
-            save_db(db)
 
     score = validate(network)
     print("*"*60)
@@ -172,19 +184,19 @@ def load_data(limit_samples=None):
     mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
     if limit_samples:
         mnist_train = mnist_train[:limit_samples]
-    mnist_train = brightness_norm(deskew(mnist_train))
+    mnist_train = center(deskew(mnist_train))
     mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
     mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
     if limit_samples:
         mnist_val = mnist_val[:limit_samples]
-    mnist_val = brightness_norm(deskew(mnist_val))
+    mnist_val = center(deskew(mnist_val))
     mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
 
     n = len(mnist_train)
     mu = mnist_train.mean()
     sigma = mnist_train.std()
 
-    print(f" - read {n} images with mu:{mu:.1f} sigma:{sigma:.1f}")
+    print(f" - read {n} images with mu:{mu:.1f} sigma:{sigma:.1f} and range {mnist_train.min():.2f} to {mnist_train.max():.2f}")
 
     return mnist_train, mnist_train_labels, mnist_val, mnist_val_labels
 
@@ -193,7 +205,8 @@ def benchmark():
 
     UPDATES = 100
 
-    network = [M.GMN([128, 1], 28 ** 2, 4, device=args.device) for i in range(10)]
+    network = create_model(10)
+
     print("Performing Benchmark...")
     start_time = time.time()
     for i in range(UPDATES):
@@ -212,8 +225,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", default="train")
     parser.add_argument("--run", default="default")
-    parser.add_argument("--layers", type=int, default=2)
     parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--layers", type=int, default=2)
+    parser.add_argument("--context_planes", type=int, default=4)
+    parser.add_argument("--nodes", type=int, help="number of nodes per layer", default=128)
+    parser.add_argument("--lr_max", type=float, default=0.01)
+    parser.add_argument("--lr_scale", type=float, help="lr=min(lr_scale/t, lr_max)", default=100)
+    parser.add_argument("--feature_mapping", type=str, help="identity|linear|cnn", default='identity')
+    parser.add_argument("--feature_size", type=int, help="number of features (d)", default=28*28)
+
+
 
     args = parser.parse_args()
 
