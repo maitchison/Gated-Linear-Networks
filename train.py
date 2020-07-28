@@ -68,27 +68,26 @@ def brightness_norm(data):
         result[i] = (result[i] / result[i].max()) * 2 - 1
     return result
 
-def validate(network, max_samples=None, allow_training=False):
+def validate(model, max_samples=None, allow_training=False):
 
     validation_samples = max_samples or len(mnist_val)
     correct = 0
     total = 0
 
-    indexes = list(range(validation_samples))
+    indexes = list(range(len(mnist_val)))
     np.random.shuffle(indexes)
 
+    model.mode = "test"
+
     for i in indexes[:validation_samples]:
-        probs = []
-        for j in range(len(network)):
-            probs.append(
-                network[j].train_on_sample(mnist_val[i].view(-1), 1 if j == mnist_val_labels[i] else 0, 0.001, apply_update=allow_training)
-            )
-        probs = torch.stack(probs)
+        probs = model.predict(mnist_val[i].view(-1), mnist_val_labels[i], lr=0.001, apply_update=allow_training)
         predicted_class = torch.argmax(probs)
 
         if predicted_class == mnist_val_labels[i]:
             correct = correct + 1
         total = total + 1
+
+    model.mode="train"
 
     return 100 * (correct / total)
 
@@ -97,20 +96,25 @@ def save_db(db):
         pickle.dump(db, f)
 
 def create_model(num_classes):
-    return [M.GMN(
+    return M.GMN(
+        num_classes,
         ([args.nodes] * args.layers) + [1],
         args.feature_size,
         args.context_planes,
         args.device,
         feature_mapping=args.feature_mapping,
-    ) for i in range(num_classes)]
+        context_smoothing=args.context_smoothing,
+        context_func=args.context_func,
+        encoding=args.encoding,
+        p0=args.p0
+    )
 
 
 def train(run_name, layers=2):
 
     print("Training...")
 
-    network = create_model(10)
+    model = create_model(10)
 
     training_samples = len(mnist_train)
 
@@ -123,11 +127,20 @@ def train(run_name, layers=2):
     db['train_score'] = []
     db['filename'] = db['run_name']+'.db'
     db['layers'] = layers
+    db['args'] = args
 
     print(f"Starting run {db['run_name']}")
 
-    training_order = list(range(training_samples))
-    np.random.shuffle(training_order)
+    if args.training_order == "default":
+        training_order = list(range(training_samples))
+    elif args.training_order == "shuffle":
+        training_order = list(range(training_samples))
+        np.random.shuffle(training_order)
+    elif args.training_order == "class":
+        training_order = list(range(training_samples))
+        training_order.sort(key=lambda i: mnist_train_labels[i])
+    else:
+        raise Exception(f"No such training order {args.training_order}")
 
     results = []
 
@@ -135,17 +148,27 @@ def train(run_name, layers=2):
 
     for iteration, i in enumerate(training_order):
 
-        lr = min(args.lr_scale / (iteration + 1), args.lr_max)
+        lr_functions = {
+            'constant': lambda x: 1,
+            'linear': lambda x: 1-(x / len(training_order)),
+            'inv': lambda x: 1 / x
+        }
+
+        assert args.lr_func in lr_functions
+
+        f = lr_functions[args.lr_func]
+        lr = min(args.lr_scale * f(iteration + 1), args.lr_max)
 
         # log progress
         if (iteration + 1) % 100 == 0:
             percent_complete = 100 * (iteration + 1) / training_samples
 
-            #val_accuracy = validate(network, 100)
-            #db['val_score'].append(val_accuracy)
-            #print(f" -train_err: {100-training_accuracy:.1f}%  val_err: {100-val_accuracy:.1f}% ({percent_complete:.2f}%)")
-
-            print(f" -train_err: {100-training_accuracy:.1f}% ({percent_complete:.2f}%)")
+            if args.include_validation_error:
+                val_accuracy = validate(model, 100)
+                db['val_score'].append(val_accuracy)
+                print(f" -train_err: {100-training_accuracy:.1f}%  val_err: {100-val_accuracy:.1f}% ({percent_complete:.2f}%)")
+            else:
+                print(f" -train_err: {100-training_accuracy:.1f}% ({percent_complete:.2f}%)")
 
             db['time_stamp'].append(time.time())
             db['iteration'].append(iteration)
@@ -153,16 +176,13 @@ def train(run_name, layers=2):
             db['lr'].append(lr)
             save_db(db)
 
-        probs = []
-        for j in range(len(network)):
-            probs.append(network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0, lr))
-        probs = torch.stack(probs)
+        probs = model.predict(mnist_train[i].view(-1), mnist_train_labels[i], lr)
         predicted_class = torch.argmax(probs)
         true_class = mnist_train_labels[i]
         results.append(int(predicted_class == true_class))
         training_accuracy = np.mean(results[-1000:]) * 100
 
-    score = validate(network)
+    score = validate(model)
     print("*"*60)
     print(f"Final score: {score:.2f}%")
     print("*"*60)
@@ -182,15 +202,18 @@ def load_data(limit_samples=None):
     print("Loading dataset...")
 
     mnist_train = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).data.float() / 255
+    mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
     if limit_samples:
         mnist_train = mnist_train[:limit_samples]
+        mnist_train_labels = mnist_train_labels[:limit_samples]
     mnist_train = center(deskew(mnist_train))
-    mnist_train_labels = datasets.MNIST(root=DATA_PATH, train=True, download=DOWNLOAD).targets
+
     mnist_val = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).data.float() / 255
+    mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
     if limit_samples:
         mnist_val = mnist_val[:limit_samples]
+        mnist_val_labels = mnist_val_labels[:limit_samples]
     mnist_val = center(deskew(mnist_val))
-    mnist_val_labels = datasets.MNIST(root=DATA_PATH, train=False, download=DOWNLOAD).targets
 
     n = len(mnist_train)
     mu = mnist_train.mean()
@@ -205,14 +228,12 @@ def benchmark():
 
     UPDATES = 100
 
-    network = create_model(10)
+    model = create_model(10)
 
     print("Performing Benchmark...")
     start_time = time.time()
     for i in range(UPDATES):
-        for j in range(len(network)):
-            network[j].train_on_sample(mnist_train[i].view(-1), 1 if j == mnist_train_labels[i] else 0,
-                                       min(100 / (i + 1), 0.01))
+        model.predict(mnist_train[i].view(-1), mnist_train_labels[i],min(100 / (i + 1), 0.01))
 
     time_taken = time.time() - start_time
     updates_per_second = UPDATES / time_taken
@@ -220,30 +241,63 @@ def benchmark():
     print("Performed {:.1f} updates per second.".format(updates_per_second))
 
 
+def baseline():
+    # run KNN
+    import sklearn
+    import sklearn.neighbors
+
+    x_train = mnist_train.reshape((len(mnist_train), 28*28))
+    x_val = mnist_val.reshape((len(mnist_val), 28 * 28))
+
+    for model in [
+        sklearn.neighbors.KNeighborsClassifier(),
+        sklearn.linear_model.SGDClassifier(),
+        sklearn.linear_model.LogisticRegression(max_iter=1000),
+    ]:
+
+        model.fit(x_train, mnist_train_labels)
+        results = torch.tensor(model.predict(x_val))
+        acc = float(torch.sum(results == mnist_val_labels)) / len(results)
+        err = 100 - acc * 100
+        print(f"{model} error {err:.1f}%")
+
+
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", default="train")
+    parser.add_argument("mode", default="train", help="train|benchmark|baseline")
     parser.add_argument("--run", default="default")
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--context_planes", type=int, default=4)
-    parser.add_argument("--nodes", type=int, help="number of nodes per layer", default=128)
+    parser.add_argument("--context_planes", type=int, default=6)
+    parser.add_argument("--nodes", type=int, help="number of nodes per layer", default=16)
     parser.add_argument("--lr_max", type=float, default=0.01)
-    parser.add_argument("--lr_scale", type=float, help="lr=min(lr_scale/t, lr_max)", default=100)
+    parser.add_argument("--lr_scale", type=float, help="lr=min(lr_scale*f(t), lr_max)", default=100)
+    parser.add_argument("--lr_func", type=str, help="constant|linear|inv", default="inv")
+    parser.add_argument("--p0", type=str, help="0|z|n (where is the number of cycles)", default="z")
     parser.add_argument("--feature_mapping", type=str, help="identity|linear|cnn", default='identity')
     parser.add_argument("--feature_size", type=int, help="number of features (d)", default=28*28)
-
-
+    parser.add_argument("--context_smoothing", type=float, help="Fraction of time to randomly send examples to random context", default=0.0)
+    parser.add_argument("--training_order", type=str,
+                        help="default|shuffle|class", default="shuffle")
+    parser.add_argument("--limit_training_samples", type=int, default=None)
+    parser.add_argument("--include_validation_error", type=bool, default=False)
+    parser.add_argument("--encoding", type=str, help="one_hot|binary", default="one_hot")
+    parser.add_argument("--context_func", type=str, help="half_space|periodic", default="half_space")
 
     args = parser.parse_args()
 
     if args.mode == 'train':
-        load_data()
+        load_data(args.limit_training_samples)
         train(run_name=args.run, layers=args.layers)
     elif args.mode == "benchmark":
-        load_data(1000)
+        load_data(args.limit_training_samples or 1000)
         benchmark()
+    elif args.mode == "baseline":
+        load_data(args.limit_training_samples)
+        baseline()
     else:
         raise Exception(f"Invalid mode {args.mode}")
 

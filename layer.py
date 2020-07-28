@@ -23,7 +23,7 @@ def random_normal(shape):
 class GMN_Layer_Vectorized():
     """ Vectorized implementation of GMN_layer """
 
-    def __init__(self, in_features, num_nodes, side_info_size, context_planes, device='cpu'):
+    def __init__(self, in_features, num_nodes, side_info_size, context_planes, device='cpu', context_smoothing=0.0, context_func="half_space"):
         """
         :param in_features: int, number of input features, i.e. nodes from previous layer
         :param num_nodes: int, number of nodes in this layer
@@ -36,9 +36,11 @@ class GMN_Layer_Vectorized():
         self.context_planes = context_planes
         self.num_nodes = num_nodes
         self.device = device
+        self.context_smoothing = context_smoothing
+        self.context_func = context_func
 
-        weight_init_size = (1/self.in_features) # start with geometric averaging
-        context_plane_bias = 0.1 # 0.3 is a good guess, as this is 1 std, no idea if this is too high or too low.
+        weight_init_size = 1.0/(self.in_features) # start with geometric averaging
+        context_plane_bias = 0.0 if context_func == "half_space" else 0.01
 
         # initialize weights
         # w: float tensor of dims [num_nodes, context_planes, in_features]
@@ -47,11 +49,15 @@ class GMN_Layer_Vectorized():
         # initialize contexts
         # context_vectors: float tensor of dims [num_nodes, context_planes, side_info_size]
         # context_biases: float tensor of dims [num_nodes, context_planes]
+
+        # todo: reverse order, make this context_planes, num_nodes... will make it faster.
+
         self.context_vectors = random_normal([num_nodes, context_planes, side_info_size]).to(self.device)
         for i in range(num_nodes):
             for j in range(context_planes):
                 self.context_vectors[i, j] /= torch.norm(self.context_vectors[i, j], p=2)
         self.context_biases = random_normal([num_nodes, context_planes]).to(self.device) * context_plane_bias
+        self.context_freq = torch.rand([num_nodes, context_planes]).to(self.device) * 2 + 0.05
 
         self.bias = math.e / (math.e + 1)
 
@@ -69,11 +75,18 @@ class GMN_Layer_Vectorized():
         for i in range(self.context_planes):
             # mask will come out as [1,num_neurons] so we flatten it
             bit = 2 ** i
-            mask = torch.mm(z[None, :], self.context_vectors[:, i].t()).view(-1) >= self.context_biases[:, i]
+
+            if self.context_func == "half_space":
+                mask = torch.mm(z[None, :], self.context_vectors[:, i].t()).view(-1) >= self.context_biases[:, i]
+            elif self.context_func == "periodic":
+                d = torch.mm(z[None, :], self.context_vectors[:, i].t()).view(-1) - self.context_biases[:, i]
+                mask = (d % self.context_freq[:, i]) > (self.context_freq[:, i] / 2)
+            else:
+                raise Exception(f"Invalid context function {self.context_func}")
             result += mask * bit
         return result
 
-    def forward(self, z, p):
+    def forward(self, z, p, is_test=False):
         """
         Forward example through this layer.
         :param z: side channel info, float tensor of dims [side_info_size]
@@ -91,6 +104,12 @@ class GMN_Layer_Vectorized():
 
         # work out context for each node
         contexts = self.get_contexts(z)
+
+        if not is_test and self.context_smoothing > 0:
+            for i in range(len(contexts)):
+                if np.random.rand() < self.context_smoothing:
+                    contexts[i] = np.random.randint(self.context_dim)
+
 
         # compute the function
         w = self.w[range(self.num_nodes), contexts] # a is [nodes, probs_from_previous_layer+1]
