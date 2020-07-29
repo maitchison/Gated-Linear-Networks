@@ -19,8 +19,7 @@ class CNNExtractor(nn.Module):
         self.conv1 = nn.Conv2d(1, 32, 3, 1)
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.conv3 = nn.Conv2d(64, 64, 3, 1)
-        #set bias to 0 so we have less effect on the cosign distance of input
-        self.projection = nn.Linear(64*3*3, out_size, bias=False)
+        self.projection = nn.Linear(64*3*3, out_size)
 
     def forward(self, x):
         x = x.view(1, 1, 28, 28)
@@ -29,7 +28,7 @@ class CNNExtractor(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.max_pool2d(x, 2)
         x = F.relu(self.conv3(x))
-        x = F.tanh(self.projection(x.view(-1)))
+        x = torch.tanh(self.projection(x.view(-1)))
         return x
 
 
@@ -45,14 +44,14 @@ class LinearExtractor(nn.Module):
     def __init__(self, in_shape, out_size):
         super().__init__()
         width, height = in_shape
-        self.projection = nn.Linear(width*height, out_size)
+        self.projection = nn.Linear(width*height, out_size, bias=False)
 
     def forward(self, x):
         return F.tanh(self.projection(x))
 
 class GMN():
     def __init__(self, num_classes, num_nodes, feature_size, num_contexts, device, feature_mapping='identity',
-                 context_smoothing=0, p0='z', encoding="one_hot", context_func="half_space"):
+                 context_smoothing=0, p0='z', encoding="one_hot", context_func="half_space", train_features=False):
         """
         :param num_nodes: array of ints containing number of nodes at each layer, last layer should contain 1 node.
         :param feature_size: int, size of side_channel input.
@@ -76,9 +75,11 @@ class GMN():
         assert encoding in ["one_hot", "binary"]
 
         self.feature_extractor = feature_extractor_funcs[feature_mapping](in_shape=(28,28), out_size=feature_size)
+        self.feature_mapping = feature_mapping
         self.feature_size = feature_size
         self.p0 = p0
         self.num_classes = num_classes
+        self.train_features = train_features
 
         self.device = device
 
@@ -94,77 +95,84 @@ class GMN():
             ]
             self.network.append(layers)
 
+        if self.train_features:
+            self.optimizer = torch.optim.Adam(self.feature_extractor.parameters(), lr=0.0001)
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.80)
+
+        self.feature_extractor.to(device=self.device)
+
         self.mode='train'
+        self.counter = 0
 
     def predict(self, z, label, lr, apply_update=True):
 
-        probs = []
-        if self._encoding == "one_hot":
-            for j in range(len(self.network)):
-                target = 1 if j == label else 0
-                probs.append(self._train_on_sample(self.network[j], z, target, lr, apply_update=apply_update))
-            probs = torch.stack(probs)
+        if self.mode == "test":
+            self.feature_extractor.eval()
         else:
-            probs = torch.ones([self.num_classes], dtype=torch.float)
-            for j in range(len(self.network)):
-                bit = (2 ** j)
-                target = 1 if (label & bit) > 0 else 0
-                prob = self._train_on_sample(self.network[j], z, target, lr, apply_update=apply_update)
-                for i in range(len(probs)):
-                    if i & bit > 0:
-                        probs[i] *= prob
-                    else:
-                        probs[i] *= 1 - prob
+            self.feature_extractor.train()
+
+        z = z.to(device=self.device).detach()
+        z = self.feature_extractor(z)
+        assert z.shape == (self.feature_size,), \
+            f"Invalid feature dims, expecting {(self.feature_size,)} found {z.shape}"
+
+        probs = []
+
+        if self.train_features:
+            loss = 0.0
+        else:
+            loss = None
+
+        for j in range(len(self.network)):
+            target = 1 if j == label else 0
+            prob = self._train_on_sample(self.network[j], z, target, lr, apply_update=apply_update)
+            if loss is not None:
+                loss = loss + (prob - target) ** 2
+            probs.append(prob.detach())
+
+        probs = torch.stack(probs)
+
+        # train input features, batch size of 1 for the moment...
+        if loss is not None:
+
+            if self.counter % 1 == 0:
+                self.optimizer.zero_grad()
+
+            loss.backward()
+
+            if (self.counter-1) % 1 == 0:
+                self.optimizer.step()
+
+            self.counter += 1
+
+        if apply_update:
+            with torch.no_grad():
+                for network in self.network:
+                    for layer in network:
+                        layer.apply_update()
 
         return probs
 
 
-    def _train_on_sample(self, layers, z, target, learning_rate, apply_update=True, p0_override=None, return_activations=False):
+    def _train_on_sample(self, layers, z, target, learning_rate, apply_update=True, return_activations=False):
 
-        with torch.no_grad():
+        activations = []
 
-            z = self.feature_extractor(z)
-            z = z.to(device=self.device)
-            assert z.shape == (self.feature_size,), f"Invalid feature dims, expecting {(self.feature_size,)} found {z.shape}"
+        for i in range(len(layers)):
+            if i == 0:
+                # get a starting guess for class
+                z = z - z.min()
+                z = (z / z.max()) * 0.90 + 0.05 # no strong assertions...
+                p = z
+            else:
+                # just a normal layer
+                p = forward[0]
 
-            activations = []
-
-            for i in range(len(layers)):
-                if i == 0:
-                    # get a starting guess for class
-                    p0 = p0_override or self.p0
-
-                    z_to_p = z.detach().clone()
-                    z_to_p -= z_to_p.min()
-                    z_to_p = (z_to_p / z_to_p.max()) * 0.90 + 0.05 # no strong assertions...
-
-                    if p0 == "z":
-                        p = z_to_p
-                    elif p0 == "0":
-                        p = torch.zeros_like(z) + 0.5
-                    elif p0.isdigit():
-                        cycle = str(int(p0)-1)
-                        if cycle == '0':
-                            cycle = 'z' # default to z on first cycle.
-
-                        initial_activations = self._train_on_sample(
-                            layers,
-                            z, target, learning_rate, apply_update=False, p0_override=cycle,
-                            return_activations=True
-                        )[-2] # last layer was single neuron, need penultimate layer.
-                        p = z_to_p
-                        p[:len(initial_activations)] = initial_activations
-                    else:
-                        raise Exception(f"Invalid p0 initialization {p0}")
-                else:
-                    # just a normal layer
-                    p = forward[0]
-
-                forward = layers[i].forward(z, p, is_test=self.mode=='test')
-                if return_activations:
-                    activations.append(forward[0])
-                if apply_update:
-                    layers[i].backward(forward, target, learning_rate)
+            forward = layers[i].forward(z, p, is_test=self.mode=='test')
+            if return_activations:
+                activations.append(forward[0])
+            if apply_update:
+                layers[i].backward(forward, target, learning_rate)
 
         prediction = forward[0][0]
 

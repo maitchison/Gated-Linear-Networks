@@ -38,6 +38,7 @@ class GMN_Layer_Vectorized():
         self.device = device
         self.context_smoothing = context_smoothing
         self.context_func = context_func
+        self.has_defered_update = False
 
         weight_init_size = 1.0/(self.in_features) # start with geometric averaging
         context_plane_bias = 0.0 if context_func == "half_space" else 0.01
@@ -47,17 +48,15 @@ class GMN_Layer_Vectorized():
         self.w = torch.zeros(self.num_nodes, self.context_dim, self.in_features, device=self.device) + weight_init_size
 
         # initialize contexts
-        # context_vectors: float tensor of dims [num_nodes, context_planes, side_info_size]
-        # context_biases: float tensor of dims [num_nodes, context_planes]
+        # context_vectors: float tensor of dims [context_planes, num_nodes, side_info_size]
+        # context_biases: float tensor of dims [context_planes, num_nodes]
 
-        # todo: reverse order, make this context_planes, num_nodes... will make it faster.
-
-        self.context_vectors = random_normal([num_nodes, context_planes, side_info_size]).to(self.device)
+        self.context_vectors = random_normal([context_planes, num_nodes, side_info_size]).to(self.device)
         for i in range(num_nodes):
             for j in range(context_planes):
-                self.context_vectors[i, j] /= torch.norm(self.context_vectors[i, j], p=2)
-        self.context_biases = random_normal([num_nodes, context_planes]).to(self.device) * context_plane_bias
-        self.context_freq = torch.rand([num_nodes, context_planes]).to(self.device) * 2 + 0.05
+                self.context_vectors[j, i] /= torch.norm(self.context_vectors[j, i], p=2)
+        self.context_biases = random_normal([context_planes, num_nodes]).to(self.device) * context_plane_bias
+        self.context_freq = torch.rand([context_planes, num_nodes]).to(self.device) * 2 + 0.05
 
         self.bias = math.e / (math.e + 1)
 
@@ -70,17 +69,17 @@ class GMN_Layer_Vectorized():
         :param z: side channel info, float tensor of dims [side_info_size]
         :return: contexts as long tensor of dims [num_numbers]
         """
-        # I think this could be faster if we test all 4 planes in one go.
+        # I think this could be a little faster if we test all planes in one go.
         result = torch.zeros([self.num_nodes], dtype=torch.long, device=self.device)
         for i in range(self.context_planes):
             # mask will come out as [1,num_neurons] so we flatten it
             bit = 2 ** i
 
             if self.context_func == "half_space":
-                mask = torch.mm(z[None, :], self.context_vectors[:, i].t()).view(-1) >= self.context_biases[:, i]
+                mask = torch.mm(z[None, :], self.context_vectors[i].t()).view(-1) >= self.context_biases[i]
             elif self.context_func == "periodic":
-                d = torch.mm(z[None, :], self.context_vectors[:, i].t()).view(-1) - self.context_biases[:, i]
-                mask = (d % self.context_freq[:, i]) > (self.context_freq[:, i] / 2)
+                d = torch.mm(z[None, :], self.context_vectors[i].t()).view(-1) - self.context_biases[i]
+                mask = (d % self.context_freq[i]) > (self.context_freq[i] / 2)
             else:
                 raise Exception(f"Invalid context function {self.context_func}")
             result += mask * bit
@@ -100,7 +99,7 @@ class GMN_Layer_Vectorized():
         epsilon = 0.001
 
         # add the bias
-        p = torch.cat((torch.as_tensor([self.bias]).to(device=self.device), p))
+        p = torch.cat((torch.as_tensor([self.bias]).to(device=self.device), p)) # does this have grad?
 
         # work out context for each node
         contexts = self.get_contexts(z)
@@ -121,7 +120,7 @@ class GMN_Layer_Vectorized():
         # note: the algorithm says to clamp the activations here, but I do a safe log so it should be fine.
         return activations, log_p, contexts
 
-    def backward(self, forward, target, learning_rate, hyper_cube_bound = 200):
+    def backward(self, forward, target, learning_rate, hyper_cube_bound = 200, defer_update=True):
         """
         Perform an update rule for each node in layer
         :param forward: information from forward pass, tuple containing (activations, input probs, contexts)
@@ -147,10 +146,31 @@ class GMN_Layer_Vectorized():
             print(log_p)
             sys.exit()
 
-        self.w[range(self.num_nodes), contexts] = torch.clamp(
-            self.w[range(self.num_nodes), contexts] + delta,
-            min=-hyper_cube_bound, max=hyper_cube_bound
-        )
+        if defer_update:
+            self.du_delta = delta.detach()
+            self.du_contexts = contexts.detach()
+            self.du_hyper_cube_bound = hyper_cube_bound
+            self.has_defered_update = True
+        else:
+            self.w[range(self.num_nodes), contexts] = torch.clamp(
+                self.w[range(self.num_nodes), contexts] + delta,
+                min=-hyper_cube_bound, max=hyper_cube_bound
+            )
+
+    def apply_update(self):
+
+        if self.has_defered_update:
+            self.w[range(self.num_nodes), self.du_contexts] = torch.clamp(
+                self.w[range(self.num_nodes), self.du_contexts] + self.du_delta,
+                min=-self.du_hyper_cube_bound, max=self.du_hyper_cube_bound
+            )
+
+        # free buffers
+        self.du_delta = None
+        self.du_contexts = None
+        self.du_hyper_cube_bound = None
+        self.has_defered_update = False
+
 
 def run_tests():
 

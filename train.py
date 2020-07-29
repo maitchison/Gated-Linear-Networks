@@ -103,12 +103,12 @@ def create_model(num_classes):
         args.context_planes,
         args.device,
         feature_mapping=args.feature_mapping,
+        train_features=args.train_features,
         context_smoothing=args.context_smoothing,
         context_func=args.context_func,
         encoding=args.encoding,
         p0=args.p0
     )
-
 
 def train(run_name, layers=2):
 
@@ -153,6 +153,10 @@ def train(run_name, layers=2):
             'linear': lambda x: 1-(x / len(training_order)),
             'inv': lambda x: 1 / x
         }
+
+        if model.train_features and iteration % 6000 == 0:
+            model.scheduler.step()
+            print("LR set to ", model.scheduler.get_lr())
 
         assert args.lr_func in lr_functions
 
@@ -278,6 +282,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr_func", type=str, help="constant|linear|inv", default="inv")
     parser.add_argument("--p0", type=str, help="0|z|n (where is the number of cycles)", default="z")
     parser.add_argument("--feature_mapping", type=str, help="identity|linear|cnn", default='identity')
+    parser.add_argument("--train_features", type=bool, default=False)
     parser.add_argument("--feature_size", type=int, help="number of features (d)", default=28*28)
     parser.add_argument("--context_smoothing", type=float, help="Fraction of time to randomly send examples to random context", default=0.0)
     parser.add_argument("--training_order", type=str,
