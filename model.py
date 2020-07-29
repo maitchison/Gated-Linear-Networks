@@ -51,7 +51,7 @@ class LinearExtractor(nn.Module):
 
 class GMN():
     def __init__(self, num_classes, num_nodes, feature_size, num_contexts, device, feature_mapping='identity',
-                 context_smoothing=0, p0='z', encoding="one_hot", context_func="half_space", train_features=False):
+                 context_smoothing=0, p0='z', context_func="half_space", train_features=False):
         """
         :param num_nodes: array of ints containing number of nodes at each layer, last layer should contain 1 node.
         :param feature_size: int, size of side_channel input.
@@ -72,7 +72,6 @@ class GMN():
         }
 
         assert feature_mapping in feature_extractor_funcs
-        assert encoding in ["one_hot", "binary"]
 
         self.feature_extractor = feature_extractor_funcs[feature_mapping](in_shape=(28,28), out_size=feature_size)
         self.feature_mapping = feature_mapping
@@ -83,12 +82,9 @@ class GMN():
 
         self.device = device
 
-        self._encoding = encoding
-
         # create networks
-        networks_needed = num_classes if encoding == "one_hot" else math.ceil(math.log2(num_classes))
         self.network = []
-        for i in range(networks_needed):
+        for _ in range(num_classes):
             layers = [layer_func(feature_size, num_nodes[0])] + [
                 layer_func(num_nodes[i - 1], num_nodes[i])
                 for i in range(1, len(num_nodes))

@@ -106,7 +106,6 @@ def create_model(num_classes):
         train_features=args.train_features,
         context_smoothing=args.context_smoothing,
         context_func=args.context_func,
-        encoding=args.encoding,
         p0=args.p0
     )
 
@@ -289,7 +288,6 @@ if __name__ == "__main__":
                         help="default|shuffle|class", default="shuffle")
     parser.add_argument("--limit_training_samples", type=int, default=None)
     parser.add_argument("--include_validation_error", type=bool, default=False)
-    parser.add_argument("--encoding", type=str, help="one_hot|binary", default="one_hot")
     parser.add_argument("--context_func", type=str, help="half_space|periodic", default="half_space")
 
     args = parser.parse_args()
